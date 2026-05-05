@@ -24,7 +24,7 @@ public:
     // Clear the queue and all rate limiting state.
     void clear();
 
-    // Reset rate limit counters without emptying the queue. Returns the number of unblocked identifiers.
+    // Reset rate limit counters without emptying the queue. Returns the number of tracked identifiers cleared.
     size_t clearRateLimits();
 
     // Return a table of rate limiting status info for the Status command.
@@ -39,12 +39,11 @@ protected:
     unique_ptr<BedrockCommand> _dequeue() override;
 
 private:
-    // Guards rate limit state (`_identifierCounts`, `_blockedIdentifiers`). Separate from the base
-    // class `_queueMutex` because the base mutex is non-recursive and is held while `_dequeue` runs.
+    // Guards `_identifierCounts`. Separate from the base class `_queueMutex` because the base
+    // mutex is non-recursive and is held while `_dequeue` runs.
     mutex _rateLimitMutex;
 
     map<string, size_t> _identifierCounts;
-    set<string> _blockedIdentifiers;
     atomic<size_t> _maxPerIdentifier{0};
     atomic<uint64_t> _emptyTime{0};
 };

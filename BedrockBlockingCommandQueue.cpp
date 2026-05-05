@@ -25,14 +25,15 @@ void BedrockBlockingCommandQueue::push(unique_ptr<BedrockCommand>&& command)
     if (checking) {
         lock_guard<decltype(_rateLimitMutex)> lock(_rateLimitMutex);
 
-        // Clear blocks if the blocking queue has been empty for 30 seconds.
+        // Clear counts if the blocking queue has been empty for 30 seconds.
         uint64_t emptyTime = _emptyTime.load();
         if (emptyTime > 0 && STimeNow() - emptyTime >= 30'000'000) {
-            _blockedIdentifiers.clear();
             _identifierCounts.clear();
         }
 
-        if (_blockedIdentifiers.count(identifier)) {
+        size_t& count = _identifierCounts[identifier];
+
+        if (count > maxPerIdentifier) {
             SINFO("Blocking queue rate limit: rejecting '" << command->request.methodLine
                   << "' for identifier '" << identifier << "'");
             // TODO: re-enable enforcement after monitoring confirms thresholds and identifier coverage
@@ -41,10 +42,8 @@ void BedrockBlockingCommandQueue::push(unique_ptr<BedrockCommand>&& command)
             // STHROW("503 Blocking queue rate limited");
         }
 
-        size_t& count = _identifierCounts[identifier];
         count++;
         if (count > maxPerIdentifier) {
-            _blockedIdentifiers.insert(identifier);
             SWARN("Blocking queue rate limit: blocking identifier '" << identifier
                   << "' with " << count << " commands in blocking queue (threshold: " << maxPerIdentifier << ")");
         }
@@ -110,11 +109,10 @@ void BedrockBlockingCommandQueue::clear()
 size_t BedrockBlockingCommandQueue::clearRateLimits()
 {
     lock_guard<decltype(_rateLimitMutex)> lock(_rateLimitMutex);
-    size_t cleared = _blockedIdentifiers.size();
+    size_t size = _identifierCounts.size();
     _identifierCounts.clear();
-    _blockedIdentifiers.clear();
     _emptyTime.store(0);
-    return cleared;
+    return size;
 }
 
 STable BedrockBlockingCommandQueue::getState()
@@ -123,21 +121,23 @@ STable BedrockBlockingCommandQueue::getState()
 
     uint64_t emptyTime = _emptyTime.load();
     if (emptyTime > 0 && STimeNow() - emptyTime >= 30'000'000) {
-        _blockedIdentifiers.clear();
         _identifierCounts.clear();
     }
 
-    STable content;
-    content["blockingRateLimitThreshold"] = to_string(_maxPerIdentifier.load());
-    content["blockedIdentifiers"] = to_string(_blockedIdentifiers.size());
-    if (!_blockedIdentifiers.empty()) {
-        content["blockedIdentifierList"] = SComposeJSONArray(_blockedIdentifiers);
-    }
-    if (!_identifierCounts.empty()) {
-        STable countsTable;
-        for (const auto& p : _identifierCounts) {
-            countsTable[p.first] = to_string(p.second);
+    size_t maxPerIdentifier = _maxPerIdentifier.load();
+    size_t blockedCount = 0;
+    STable countsTable;
+    for (const auto& p : _identifierCounts) {
+        countsTable[p.first] = to_string(p.second);
+        if (p.second > maxPerIdentifier) {
+            blockedCount++;
         }
+    }
+
+    STable content;
+    content["blockingRateLimitThreshold"] = to_string(maxPerIdentifier);
+    content["blockedIdentifiers"] = to_string(blockedCount);
+    if (!countsTable.empty()) {
         content["blockingQueueIdentifierCounts"] = SComposeJSONObject(countsTable);
     }
     return content;
