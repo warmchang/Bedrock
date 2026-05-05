@@ -51,14 +51,15 @@ void BedrockBlockingCommandQueue::push(unique_ptr<BedrockCommand>&& command)
 
     // A command is entering the queue, so it is no longer empty. Clear the empty timestamp so
     // the 30-second auto-reset window doesn't fire until the queue drains again.
-    _emptyTime.store(0);
+    uint64_t previousEmptyTime = _emptyTime.exchange(0);
 
     try {
         // Base class acquires its own (non-recursive) `_queueMutex`.
         BedrockCommandQueue::push(move(command));
     } catch (...) {
-        // Roll back the increment so a base-class enqueue failure can't permanently inflate counts
-        // and falsely block this identifier.
+        // The command never entered the queue. Roll back the count increment and restore the
+        // empty timestamp so the 30-second auto-reset timer isn't lost.
+        _emptyTime.store(previousEmptyTime);
         if (checking) {
             lock_guard<decltype(_rateLimitMutex)> lock(_rateLimitMutex);
             _decrementIdentifierCount(identifier);
