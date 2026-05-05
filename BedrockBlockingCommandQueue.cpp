@@ -104,17 +104,22 @@ size_t BedrockBlockingCommandQueue::clearRateLimits()
 
 STable BedrockBlockingCommandQueue::getState()
 {
-    lock_guard<decltype(_rateLimitMutex)> lock(_rateLimitMutex);
+    map<string, size_t> countsCopy;
+    {
+        lock_guard<decltype(_rateLimitMutex)> lock(_rateLimitMutex);
 
-    uint64_t emptyTime = _emptyTime.load();
-    if (emptyTime > 0 && STimeNow() - emptyTime >= 30'000'000) {
-        _identifierCounts.clear();
+        uint64_t emptyTime = _emptyTime.load();
+        if (emptyTime > 0 && STimeNow() - emptyTime >= 30'000'000) {
+            _identifierCounts.clear();
+        }
+
+        countsCopy = _identifierCounts;
     }
 
     size_t maxPerIdentifier = _maxPerIdentifier.load();
     size_t blockedCount = 0;
     STable countsTable;
-    for (const auto& p : _identifierCounts) {
+    for (const auto& p : countsCopy) {
         countsTable[p.first] = to_string(p.second);
         if (p.second > maxPerIdentifier) {
             blockedCount++;
