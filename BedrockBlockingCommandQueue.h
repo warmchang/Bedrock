@@ -39,6 +39,10 @@ protected:
     unique_ptr<BedrockCommand> _dequeue() override;
 
 private:
+    // Decrement the count for `identifier` in `_identifierCounts`, erasing the entry if it reaches zero.
+    // Caller must hold `_rateLimitMutex`.
+    void _decrementIdentifierCount(const string& identifier);
+
     // Guards `_identifierCounts`. Separate from the base class `_queueMutex` because the base
     // mutex is non-recursive and is held while `_dequeue` runs.
     mutex _rateLimitMutex;

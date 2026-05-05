@@ -61,14 +61,7 @@ void BedrockBlockingCommandQueue::push(unique_ptr<BedrockCommand>&& command)
         // and falsely block this identifier.
         if (checking) {
             lock_guard<decltype(_rateLimitMutex)> lock(_rateLimitMutex);
-            auto it = _identifierCounts.find(identifier);
-            if (it != _identifierCounts.end()) {
-                if (it->second <= 1) {
-                    _identifierCounts.erase(it);
-                } else {
-                    it->second--;
-                }
-            }
+            _decrementIdentifierCount(identifier);
         }
         throw;
     }
@@ -83,14 +76,7 @@ unique_ptr<BedrockCommand> BedrockBlockingCommandQueue::_dequeue()
     // Decrement rate limit count when a command leaves the queue.
     if (!command->blockingIdentifier.empty() && _maxPerIdentifier.load() > 0) {
         lock_guard<decltype(_rateLimitMutex)> lock(_rateLimitMutex);
-        auto it = _identifierCounts.find(command->blockingIdentifier);
-        if (it != _identifierCounts.end()) {
-            if (it->second <= 1) {
-                _identifierCounts.erase(it);
-            } else {
-                it->second--;
-            }
-        }
+        _decrementIdentifierCount(command->blockingIdentifier);
     }
 
     if (_queue.empty() && _emptyTime.load() == 0) {
@@ -146,4 +132,16 @@ STable BedrockBlockingCommandQueue::getState()
 size_t BedrockBlockingCommandQueue::setMaxPerIdentifier(size_t value)
 {
     return _maxPerIdentifier.exchange(value);
+}
+
+void BedrockBlockingCommandQueue::_decrementIdentifierCount(const string& identifier)
+{
+    auto it = _identifierCounts.find(identifier);
+    if (it != _identifierCounts.end()) {
+        if (it->second <= 1) {
+            _identifierCounts.erase(it);
+        } else {
+            it->second--;
+        }
+    }
 }
