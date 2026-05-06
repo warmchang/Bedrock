@@ -2180,7 +2180,6 @@ void SQLiteNode::_recvSynchronize(SQLitePeer* peer, const SData& message)
         SDEBUG("Committing current transaction because _recvSynchronize: " << _db.getUncommittedQuery());
         _db.commit(stateName(_state));
 
-
         --commitsRemaining;
     }
 
