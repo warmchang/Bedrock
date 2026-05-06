@@ -127,8 +127,8 @@ TestPluginCommand::TestPluginCommand(SQLiteCommand&& baseCommand, BedrockPlugin_
     pendingResult(false),
     urls(request["urls"])
 {
-    if (request.isSet("blockingIdentifier")) {
-        blockingIdentifier = request["blockingIdentifier"];
+    if (request.isSet("blockingQueueRateLimitIdentifier")) {
+        blockingQueueRateLimitIdentifier = request["blockingQueueRateLimitIdentifier"];
     }
 }
 

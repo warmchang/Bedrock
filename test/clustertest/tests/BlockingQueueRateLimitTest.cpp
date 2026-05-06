@@ -29,8 +29,8 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
         BedrockTester& leader = tester->getTester(0);
 
         // Set the blocking rate limit threshold and verify it shows up in Status.
-        SData setLimit("SetBlockingRateLimit");
-        setLimit["MaxPerIdentifier"] = "5";
+        SData setLimit("SetBlockingQueueRateLimit");
+        setLimit["MaxRequestsPerIdentifier"] = "5";
         leader.executeWaitVerifyContent(setLimit, "200", true);
 
         SData status("Status");
@@ -43,8 +43,8 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
         setConflict["MaxConflictRetries"] = "1";
         leader.executeWaitVerifyContent(setConflict, "200", true);
 
-        SData setLimitLow("SetBlockingRateLimit");
-        setLimitLow["MaxPerIdentifier"] = "1";
+        SData setLimitLow("SetBlockingQueueRateLimit");
+        setLimitLow["MaxRequestsPerIdentifier"] = "1";
         leader.executeWaitVerifyContent(setLimitLow, "200", true);
 
         // Send commands from multiple threads to all nodes. Cross-node escalation generates
@@ -57,7 +57,7 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
                 vector<SData> requests;
                 for (int j = 0; j < 200; j++) {
                     SData cmd("idcollision");
-                    cmd["blockingIdentifier"] = "controltest";
+                    cmd["blockingQueueRateLimitIdentifier"] = "controltest";
                     cmd["value"] = to_string(i * 200 + j);
                     requests.push_back(cmd);
                 }
@@ -77,7 +77,7 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
         ASSERT_TRUE(count503.load() >= 1);
 
         // ClearBlocks should reset all identifier counts.
-        SData clearBlocks("SetBlockingRateLimit");
+        SData clearBlocks("SetBlockingQueueRateLimit");
         clearBlocks["ClearBlocks"] = "true";
         leader.executeWaitVerifyContent(clearBlocks, "200", true);
 
@@ -89,8 +89,8 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
         resetConflict["MaxConflictRetries"] = "3";
         leader.executeWaitVerifyContent(resetConflict, "200", true);
 
-        SData resetLimit("SetBlockingRateLimit");
-        resetLimit["MaxPerIdentifier"] = "0";
+        SData resetLimit("SetBlockingQueueRateLimit");
+        resetLimit["MaxRequestsPerIdentifier"] = "0";
         leader.executeWaitVerifyContent(resetLimit, "200", true);
     }
 
@@ -103,12 +103,12 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
         setConflict["MaxConflictRetries"] = "1";
         leader.executeWaitVerifyContent(setConflict, "200", true);
 
-        SData setLimit("SetBlockingRateLimit");
-        setLimit["MaxPerIdentifier"] = "2";
+        SData setLimit("SetBlockingQueueRateLimit");
+        setLimit["MaxRequestsPerIdentifier"] = "2";
         leader.executeWaitVerifyContent(setLimit, "200", true);
 
         // Spawn 3 threads, each sending 200 idcollision commands to a different node,
-        // all with the same blockingIdentifier. This generates write conflicts that push
+        // all with the same blockingQueueRateLimitIdentifier. This generates write conflicts that push
         // commands into the blocking queue, triggering rate limiting.
         atomic<int> count503(0);
         atomic<int> count200(0);
@@ -121,7 +121,7 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
                 vector<SData> requests;
                 for (int j = 0; j < 200; j++) {
                     SData cmd("idcollision");
-                    cmd["blockingIdentifier"] = "testuser";
+                    cmd["blockingQueueRateLimitIdentifier"] = "testuser";
                     cmd["value"] = "node" + to_string(i) + "-" + to_string(j);
                     requests.push_back(cmd);
                 }
@@ -146,7 +146,7 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
         ASSERT_TRUE(count503.load() >= 1);
 
         // Clear blocks and reset on leader.
-        SData clearBlocks("SetBlockingRateLimit");
+        SData clearBlocks("SetBlockingQueueRateLimit");
         clearBlocks["ClearBlocks"] = "true";
         leader.executeWaitVerifyContent(clearBlocks, "200", true);
 
@@ -156,7 +156,7 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
 
         // Verify the previously blocked user can send commands again.
         SData cmd("idcollision");
-        cmd["blockingIdentifier"] = "testuser";
+        cmd["blockingQueueRateLimitIdentifier"] = "testuser";
         leader.executeWaitVerifyContent(cmd, "200");
     }
 } __BlockingQueueRateLimitTest;

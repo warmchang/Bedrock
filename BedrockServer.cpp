@@ -1903,7 +1903,7 @@ bool BedrockServer::_isControlCommand(const unique_ptr<BedrockCommand>& command)
         SIEquals(command->request.methodLine, "BlockWrites") ||
         SIEquals(command->request.methodLine, "UnblockWrites") ||
         SIEquals(command->request.methodLine, "SetMaxSocketThreads") ||
-        SIEquals(command->request.methodLine, "SetBlockingRateLimit") ||
+        SIEquals(command->request.methodLine, "SetBlockingQueueRateLimit") ||
         SIEquals(command->request.methodLine, "ClearBlockingQueue") ||
         SIEquals(command->request.methodLine, "CRASH_COMMAND")
     ) {
@@ -2024,11 +2024,11 @@ void BedrockServer::_control(unique_ptr<BedrockCommand>& command)
         }
     } else if (SIEquals(command->request.methodLine, "SetConflictPageLocks")) {
         _enableConflictPageLocks = command->request.test("enable");
-    } else if (SIEquals(command->request.methodLine, "SetBlockingRateLimit")) {
-        if (command->request.isSet("MaxPerIdentifier")) {
-            int64_t maxPerIdentifier = command->request.calc64("MaxPerIdentifier");
+    } else if (SIEquals(command->request.methodLine, "SetBlockingQueueRateLimit")) {
+        if (command->request.isSet("MaxRequestsPerIdentifier")) {
+            int64_t maxPerIdentifier = command->request.calc64("MaxRequestsPerIdentifier");
             if (maxPerIdentifier >= 0) {
-                size_t previous = _blockingCommandQueue.setMaxPerIdentifier(maxPerIdentifier);
+                size_t previous = _blockingCommandQueue.setMaxRequestsPerIdentifier(maxPerIdentifier);
                 response["previousMaxBlockingQueuePerIdentifier"] = to_string(previous);
                 SINFO("Setting blocking queue max per identifier to " << maxPerIdentifier);
             }

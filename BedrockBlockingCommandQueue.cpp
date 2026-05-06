@@ -18,11 +18,11 @@ BedrockBlockingCommandQueue::BedrockBlockingCommandQueue() :
 
 void BedrockBlockingCommandQueue::push(unique_ptr<BedrockCommand>&& command)
 {
-    const string identifier = command->blockingIdentifier;
+    const string identifier = command->blockingQueueRateLimitIdentifier;
     const size_t maxPerIdentifier = _maxPerIdentifier.load();
-    const bool checking = maxPerIdentifier > 0 && !identifier.empty();
+    const bool shouldCheck = maxPerIdentifier > 0 && !identifier.empty();
 
-    if (checking) {
+    if (shouldCheck) {
         lock_guard<decltype(_rateLimitMutex)> lock(_rateLimitMutex);
 
         // Clear counts if the blocking queue has been empty for 30 seconds.
@@ -57,7 +57,7 @@ void BedrockBlockingCommandQueue::push(unique_ptr<BedrockCommand>&& command)
         // The command never entered the queue. Roll back the count increment and restore the
         // empty timestamp so the 30-second auto-reset timer isn't lost.
         _emptyTime.store(previousEmptyTime);
-        if (checking) {
+        if (shouldCheck) {
             lock_guard<decltype(_rateLimitMutex)> lock(_rateLimitMutex);
             _decrementIdentifierCount(identifier);
         }
@@ -72,9 +72,9 @@ unique_ptr<BedrockCommand> BedrockBlockingCommandQueue::_dequeue()
     auto command = BedrockCommandQueue::_dequeue();
 
     // Decrement rate limit count when a command leaves the queue.
-    if (!command->blockingIdentifier.empty() && _maxPerIdentifier.load() > 0) {
+    if (!command->blockingQueueRateLimitIdentifier.empty() && _maxPerIdentifier.load() > 0) {
         lock_guard<decltype(_rateLimitMutex)> lock(_rateLimitMutex);
-        _decrementIdentifierCount(command->blockingIdentifier);
+        _decrementIdentifierCount(command->blockingQueueRateLimitIdentifier);
     }
 
     if (_queue.empty() && _emptyTime.load() == 0) {
@@ -132,7 +132,7 @@ STable BedrockBlockingCommandQueue::getState()
     return content;
 }
 
-size_t BedrockBlockingCommandQueue::setMaxPerIdentifier(size_t value)
+size_t BedrockBlockingCommandQueue::setMaxRequestsPerIdentifier(size_t value)
 {
     return _maxPerIdentifier.exchange(value);
 }

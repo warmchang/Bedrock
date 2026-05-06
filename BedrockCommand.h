@@ -282,7 +282,7 @@ private:
     CrashMap crashIdentifyingValues;
 
     // An identifier for rate-limiting commands in the blocking queue. Empty means skip rate limiting.
-    string blockingIdentifier;
+    string blockingQueueRateLimitIdentifier;
 
     // Return the timestamp by which this command must finish executing.
     uint64_t timeout() const

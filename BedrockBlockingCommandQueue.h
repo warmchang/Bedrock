@@ -31,7 +31,7 @@ public:
     STable getState();
 
     // Set the max commands per identifier threshold. Returns the previous value.
-    size_t setMaxPerIdentifier(size_t value);
+    size_t setMaxRequestsPerIdentifier(size_t value);
 
 protected:
     // Called by get() while _queueMutex is held; atomically decrements per-identifier counts
