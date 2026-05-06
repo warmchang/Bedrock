@@ -2173,6 +2173,7 @@ void SQLiteNode::_recvSynchronize(SQLitePeer* peer, const SData& message)
             STHROW("failed to prepare transaction");
         }
         if (newHash != commit["Hash"]) {
+            _db.rollback();
             STHROW("potential hash mismatch");
         }
 
