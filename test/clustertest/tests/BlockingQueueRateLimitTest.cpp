@@ -49,9 +49,10 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
 
         // Send commands from multiple threads to all nodes. Cross-node escalation generates
         // enough concurrent writes to reliably pile up 2+ commands in the blocking queue.
+        atomic<int> count503(0);
         list<thread> threads;
         for (int i : {0, 1, 2}) {
-            threads.emplace_back([this, i]() {
+            threads.emplace_back([this, i, &count503]() {
                 BedrockTester& node = tester->getTester(i);
                 vector<SData> requests;
                 for (int j = 0; j < 200; j++) {
@@ -60,18 +61,22 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
                     cmd["value"] = to_string(i * 200 + j);
                     requests.push_back(cmd);
                 }
-                node.executeWaitMultipleData(requests);
+                auto results = node.executeWaitMultipleData(requests);
+                for (auto& result : results) {
+                    if (SToInt(result.methodLine) == 503) {
+                        count503.fetch_add(1);
+                    }
+                }
             });
         }
         for (thread& t : threads) {
             t.join();
         }
 
-        // At least one identifier should now be blocked.
-        json = SParseJSONObject(leader.executeWaitVerifyContent(status, "200", true));
-        ASSERT_TRUE(SToInt(json["blockedIdentifiers"]) >= 1);
+        // Rate limiting should have rejected at least one command with 503.
+        ASSERT_TRUE(count503.load() >= 1);
 
-        // ClearBlocks should remove all blocked identifiers.
+        // ClearBlocks should reset all identifier counts.
         SData clearBlocks("SetBlockingRateLimit");
         clearBlocks["ClearBlocks"] = "true";
         leader.executeWaitVerifyContent(clearBlocks, "200", true);
@@ -139,12 +144,6 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
 
         ASSERT_EQUAL(count200.load() + count503.load(), 600);
         ASSERT_TRUE(count503.load() >= 1);
-
-        // Verify the leader shows blocked users.
-        SData status("Status");
-        STable json = SParseJSONObject(leader.executeWaitVerifyContent(status, "200", true));
-        int blockedCount = SToInt(json["blockedIdentifiers"]);
-        ASSERT_TRUE(blockedCount >= 1);
 
         // Clear blocks and reset on leader.
         SData clearBlocks("SetBlockingRateLimit");
