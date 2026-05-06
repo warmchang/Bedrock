@@ -159,4 +159,7 @@ struct BlockingQueueRateLimitTest : tpunit::TestFixture
         cmd["blockingQueueRateLimitIdentifier"] = "testuser";
         leader.executeWaitVerifyContent(cmd, "200");
     }
-} __BlockingQueueRateLimitTest;
+};
+// Disabled while rate limiting is log-only. Re-enable enforcement (the STHROW in
+// BedrockBlockingCommandQueue::push) and uncomment below to run these tests.
+// } __BlockingQueueRateLimitTest;
