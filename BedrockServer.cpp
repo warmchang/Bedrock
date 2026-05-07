@@ -142,6 +142,7 @@ void BedrockServer::sync()
     uint64_t nextActivity = STimeNow();
     unique_ptr<BedrockCommand> command(nullptr);
     bool committingCommand = false;
+    bool upgradeInProgress = false;
 
     // Timer for S_poll performance logging. Created outside the loop because it's cumulative.
     AutoTimer pollTimer("sync thread poll");
@@ -318,17 +319,14 @@ void BedrockServer::sync()
             shutdownTimer.safeNodeState = chrono::steady_clock::now();
 
             // If we bailed out while doing a upgradeDB, clear state
-            if (_upgradeInProgress) {
-                _upgradeInProgress = false;
+            if (upgradeInProgress) {
+                upgradeInProgress = false;
                 if (committingCommand) {
                     const string commandName = command ? command->getMethodName() : "No Command";
                     db.rollback(commandName);
                     committingCommand = false; //NOLINT
                 }
             }
-
-            // If we're not leading, we're not upgrading, but we will need to check for upgrades again next time we go leading, so be ready for that.
-            _upgradeCompleted = false;
 
             // We should give up an any commands, and let them be re-escalated. If commands were initiated locally,
             // we can just re-queue them, they will get re-checked once things clear up, and then they'll get
@@ -364,22 +362,32 @@ void BedrockServer::sync()
             continue;
         }
 
-        // If we've just switched to the leading state, we want to upgrade the DB. We set a global `upgradeInProgress`
-        // flag to prevent workers from trying to use the DB while we do this.
-        // It's also possible for the upgrade to fail on the first try, in the case that our followers weren't ready to
-        // receive the transaction when we started. In this case, we'll try the upgrade again if we were already
-        // leading, and the upgrade is still in progress (because the first try failed), and we're not currently
-        // attempting to commit it.
-        if ((preUpdateState != SQLiteNodeState::LEADING && getState() == SQLiteNodeState::LEADING) ||
-            (getState() == SQLiteNodeState::LEADING && _upgradeInProgress && !committingCommand)) {
+        // This first time we start LEADING, we will try and upgrade the DB.
+        // We then set _upgradeCompleted and will not attempt to upgrade again, there is no more work to do.
+        if (
+            // If we've aleady set that we've completed an upgrade, we can skip this block.
+            !_upgradeCompleted &&
+
+            // Run this block id we *JUST* switched
+            ((preUpdateState != SQLiteNodeState::LEADING && getState() == SQLiteNodeState::LEADING)
+             ||
+            (getState() == SQLiteNodeState::LEADING && upgradeInProgress && !committingCommand))
+        ) {
             // Store this before we start writing to the DB, which can take a while depending on what changes were made
             // (for instance, adding an index).
-            _upgradeInProgress = true;
+            upgradeInProgress = true;
             if (!_syncNode->hasQuorum()) {
-                // We are now "upgrading" but we won't actually start the commit until the cluster is sufficiently
-                // connected. This is because if we need to roll back the commit, it disconnects the entire cluster,
-                // which is more likely to trigger the same thing to happen again, making cluster startup take
-                // significantly longer. In this case we'll just loop again, like if the upgrade failed.
+                // Because we are going to commit the upgrade as a QUORUM commit (i.e., wait until over half of nodes
+                // approve it), we wait until `hasQuorum()` is true before we even attempt to start it.
+                // You might ask "if we are LEADING, how do we not have QUORUM?" and the answer to that is that as soon as
+                // we become LEADING, we need nodes to subscribe to us in order to indicate that they are 100% caught up
+                // and ready to accept a transaction stream. basically we go LEADING, and then nodes go SUBSCRIBING for
+                // a second and then they go FOLLOWING.
+                // If we attempt this transaction before we wait for these nodes to go FOLLOWING, they will not participate in
+                // the transaction. This will cause the transaction to fail and be rolled back, but worse, it causes the whole
+                // cluster to reconnect, because a failed QUORUM transction throws the whole state of the cluster into
+                // question. This then takes a while to resolve as nodes all reconnect to one another, and is at risk for
+                // happening again on the next attempt as well.
                 SINFO("Waiting for quorum availability before running UpgradeDB.");
                 continue;
             }
@@ -397,7 +405,7 @@ void BedrockServer::sync()
             } else {
                 // If we're not doing an upgrade, we don't need to keep suppressing multi-write, and we're done with
                 // the upgradeInProgress flag.
-                _upgradeInProgress = false;
+                upgradeInProgress = false;
                 _upgradeCompleted = true;
                 SINFO("UpgradeDB skipped, done.");
             }
@@ -413,9 +421,9 @@ void BedrockServer::sync()
             committingCommand = false;
 
             // If we were upgrading, there's no response to send, we're just done.
-            if (_upgradeInProgress) {
+            if (upgradeInProgress) {
                 if (_syncNode->commitSucceeded()) {
-                    _upgradeInProgress = false;
+                    upgradeInProgress = false;
                     _upgradeCompleted = true;
                     SINFO("UpgradeDB succeeded, done.");
                     _notifyDone.push(true);
@@ -775,7 +783,7 @@ void BedrockServer::runCommand(unique_ptr<BedrockCommand>&& _command, bool isBlo
 
     // We just spin until the node looks ready to go. Typically, this doesn't happen expect briefly at startup.
     size_t waitCount = 0;
-    while (_upgradeInProgress || (getState() != SQLiteNodeState::LEADING && getState() != SQLiteNodeState::FOLLOWING)) {
+    while (!isUpgradeComplete()) {
         // It's feasible that our command times out in this loop. In this case, we do not have a DB object to pass.
         // The only implication of this is the response does not get the commitCount attached to it.
         if (BedrockCore::isTimedOut(command, nullptr, this)) {
@@ -1215,7 +1223,6 @@ void BedrockServer::_resetServer()
     lock_guard<mutex> lock(_portMutex);
 
     _requestCount = 0;
-    _upgradeInProgress = false;
     if (_commandPortBlockReasons.size()) {
         SWARN("Clearing leftover command port blocks in resetServer (" << _commandPortBlockReasons.size() << " blocks remaining).");
         _commandPortBlockReasons.clear();
@@ -1243,7 +1250,6 @@ BedrockServer::BedrockServer(SQLiteNodeState state, const SData& args_)
 
 BedrockServer::BedrockServer(const SData& args_)
     : SQLiteServer(), shutdownWhileDetached(false), args(args_), _requestCount(0),
-    _upgradeInProgress(false),
     _isCommandPortLikelyBlocked(false),
     _syncLoopShouldBeRunning(true), _syncNode(nullptr), _clusterMessenger(nullptr), _shutdownState(RUNNING),
     _multiWriteEnabled(args.test("-enableMultiWrite")), _enableConflictPageLocks(args.test("-enableConflictPageLocks")), _shouldBackup(false), _detach(args.isSet("-bootstrap")),
@@ -1693,7 +1699,20 @@ bool BedrockServer::isDetached()
 
 bool BedrockServer::isUpgradeComplete()
 {
-    return _upgradeCompleted;
+    auto state = getState();
+    if (state == SQLiteNodeState::FOLLOWING) {
+        // We are as upgraded as we can be, becuase someone else is controlling what the state of "upgraded" is,
+        // and they will broadcast those changes to us when appropriate.
+        return true;
+    }
+    if (state == SQLiteNodeState::STANDINGUP || state == SQLiteNodeState::LEADING || state == SQLiteNodeState::STANDINGDOWN) {
+        // We are upgraded if we have ever tried to run an upgrade. We are the authority so our schema is definitive,
+        // and so if it's applied, then the upgrade is done.
+        return _upgradeCompleted;
+    }
+
+    // In any other state, we can't really know if we're uprgaded, because we don't know what that means without a leader.
+    return false;
 }
 
 void BedrockServer::_status(unique_ptr<BedrockCommand>& command)

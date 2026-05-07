@@ -216,6 +216,11 @@ public:
     bool isDetached();
 
     // Returns if all plugins have completed calling UpgradeDB
+
+    // This probably makes sense to be called `isUpgraded`
+    // It should return true if:
+    // We are leading and have attempted an upgrade (we can only do one upgrade per deployed version).
+    // We are following
     bool isUpgradeComplete();
 
     // See if there's a plugin that can turn this request into a command.
