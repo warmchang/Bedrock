@@ -66,10 +66,13 @@ void BedrockBlockingCommandQueue::push(unique_ptr<BedrockCommand>&& command)
     }
 }
 
+
+/**
+ * Dequeues command and inspects _queue to update rate limit counts and _emptyTime
+ * Called by `BedrockCommandQueue::get()` with the base `_queueMutex` held. Calling any base method that reacquires `_queueMutex` would deadlock.
+ */
 unique_ptr<BedrockCommand> BedrockBlockingCommandQueue::_dequeue()
 {
-    // Called by `BedrockCommandQueue::get()` with the base `_queueMutex` held. Inspect `_queue` directly here;
-    // calling any base method that reacquires `_queueMutex` would deadlock.
     auto command = BedrockCommandQueue::_dequeue();
 
     // Decrement rate limit count when a command leaves the queue.
