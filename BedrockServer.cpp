@@ -434,7 +434,7 @@ void BedrockServer::sync()
                 continue;
             }
 
-            // Record the time spent, unless we were upgrading, in which case, there's no command to write to.
+            // Record the time spent.
             command->stopTiming(BedrockCommand::COMMIT_SYNC);
 
             if (command->shouldPostProcess() && command->response.methodLine == "200 OK") {
@@ -772,9 +772,13 @@ void BedrockServer::runCommand(unique_ptr<BedrockCommand>&& _command, bool isBlo
         return;
     }
 
-    // We just spin until the node looks ready to go. Typically, this doesn't happen expect briefly at startup.
     size_t waitCount = 0;
-    while (!isUpgradeComplete()) {
+
+    // We just spin until the node looks ready to go. Typically, this doesn't happen expect briefly at startup.
+    // We specifically exclude `STANDINGDOWN` because even though we *can* process commands in this state, the intention
+    // here is to shut the node down and so we want to stop building a backlog of in-process commands that prevent
+    // standdown from completing. They will get blocked until we hit our final FOLLOWING state and then finished.
+    while (!dbReadyToHandleRequests() && getState() != SQLiteNodeState::STANDINGDOWN) {
         // It's feasible that our command times out in this loop. In this case, we do not have a DB object to pass.
         // The only implication of this is the response does not get the commitCount attached to it.
         if (BedrockCore::isTimedOut(command, nullptr, this)) {
@@ -1688,16 +1692,16 @@ bool BedrockServer::isDetached()
     return _detach && !_syncLoopShouldBeRunning && _pluginsDetached;
 }
 
-bool BedrockServer::isUpgradeComplete()
+bool BedrockServer::dbReadyToHandleRequests()
 {
     auto state = getState();
     if (state == SQLiteNodeState::FOLLOWING) {
-        // We are as upgraded as we can be, becuase someone else is controlling what the state of "upgraded" is,
+        // We are as upgraded as we can be, because someone else is controlling what the state of "upgraded" is,
         // and they will broadcast those changes to us when appropriate.
         return true;
     }
     if (state == SQLiteNodeState::LEADING || state == SQLiteNodeState::STANDINGDOWN) {
-        // We are upgraded if we have ever completed an upgrade (including via no-oop).
+        // We are upgraded if we have ever completed an upgrade (including via no-op).
         // We are the authority so our schema is definitive, and so if it's applied, then the upgrade is done.
         return _upgradeCompleted;
     }
