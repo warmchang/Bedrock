@@ -220,7 +220,7 @@ public:
     bool dbReadyToHandleRequests();
 
     // Legacy name for dbReadyToHandleRequests, retained for backwards compatibility.
-    bool isUpgradeComplete()
+    inline bool isUpgradeComplete()
     {
         return dbReadyToHandleRequests();
     }
