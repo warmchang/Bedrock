@@ -778,7 +778,7 @@ void BedrockServer::runCommand(unique_ptr<BedrockCommand>&& _command, bool isBlo
     // We specifically exclude `STANDINGDOWN` because even though we *can* process commands in this state, the intention
     // here is to shut the node down and so we want to stop building a backlog of in-process commands that prevent
     // standdown from completing. They will get blocked until we hit our final FOLLOWING state and then finished.
-    while (!dbReadyToHandleRequests() && getState() != SQLiteNodeState::STANDINGDOWN) {
+    while (!dbReadyToHandleRequests() || getState() == SQLiteNodeState::STANDINGDOWN) {
         // It's feasible that our command times out in this loop. In this case, we do not have a DB object to pass.
         // The only implication of this is the response does not get the commitCount attached to it.
         if (BedrockCore::isTimedOut(command, nullptr, this)) {
