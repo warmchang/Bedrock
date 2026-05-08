@@ -215,12 +215,14 @@ public:
     // Returns if we are detached and the sync thread has exited.
     bool isDetached();
 
-    // FOLLOWING nodes are always upgraded. LEADING nodes are upgraded if they've run _upgradeDB()
-    // at least once (STANDINGUP AND STANDINGDOWN count at LEADING here).
-    // Nodes in any other state are not upgraded.
-    // This would really make more sense being called "dbReadyToHandleRequests" or similar, but this
-    // API is in use in plugins.
-    bool isUpgradeComplete();
+    // If a node is LEADING (or STANDINGDOWN) and has, at some point, completed a DB upgrade,
+    // OR if the node is FOLLOWING, it is ready to handle requests.
+    bool dbReadyToHandleRequests();
+
+    // Legacy name for dbReadyToHandleRequests, retained for backwards compatibility.
+    bool isUpgradeComplete() {
+        return dbReadyToHandleRequests();
+    }
 
     // See if there's a plugin that can turn this request into a command.
     // If not, we'll create a command that returns `430 Unrecognized command`.

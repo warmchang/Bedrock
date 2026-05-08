@@ -356,7 +356,7 @@ void BedrockServer::sync()
             continue;
         }
 
-        // If _upgradeCompleted is set, I.e., we're run at least one upgrade, we can skip this block.
+        // If _upgradeCompleted is set, I.e., we've run at least one upgrade, we can skip this block.
         // Otherwise, if we're leading, let's start the commit.
         // Also, if a commit is in progress, skip it (it's the commit we started on the last loop iteration).
         if (!_upgradeCompleted && getState() == SQLiteNodeState::LEADING && !commitInProgress) {
@@ -369,13 +369,24 @@ void BedrockServer::sync()
                 // a second and then they go FOLLOWING.
                 // If we attempt this transaction before we wait for these nodes to go FOLLOWING, they will not participate in
                 // the transaction. This will cause the transaction to fail and be rolled back, but worse, it causes the whole
-                // cluster to reconnect, because a failed QUORUM transction throws the whole state of the cluster into
+                // cluster to reconnect, because a failed QUORUM transaction throws the whole state of the cluster into
                 // question. This then takes a while to resolve as nodes all reconnect to one another, and is at risk for
                 // happening again on the next attempt as well.
                 SINFO("Waiting for quorum availability before running UpgradeDB.");
                 continue;
             }
-            if (_upgradeDB(db)) {
+            bool dbHasChanges = false;
+            try {
+                dbHasChanges = _upgradeDB(db);
+            } catch (const SException& e) {
+                // It's possible that _upgradeDB throws at least "512 Internal Lock Timeout".
+                // Because upgrading the DB is critical and needs to be completed before we can use the
+                // DB for anything, we attempt a retry here. A lock timeout should be retryable.
+                SWARN("Got exception: " << e.method << " attempting to upgrade DB, will retry.");
+                db.rollback();
+                continue;
+            }
+            if (dbHasChanges) {
                 commitInProgress = true;
                 _syncNode->startCommit(SQLiteNode::QUORUM);
                 _lastQuorumCommandTime = STimeNow();
@@ -417,7 +428,7 @@ void BedrockServer::sync()
                 continue;
             }
 
-            // We should only get here with a command existing.
+            // This case is expected to be impossible but the warning is retained for now because the confidence in that is low.
             if (!command) {
                 SWARN("Sync thread commit with no command!");
                 continue;
@@ -1685,13 +1696,13 @@ bool BedrockServer::isUpgradeComplete()
         // and they will broadcast those changes to us when appropriate.
         return true;
     }
-    if (state == SQLiteNodeState::STANDINGUP || state == SQLiteNodeState::LEADING || state == SQLiteNodeState::STANDINGDOWN) {
-        // We are upgraded if we have ever tried to run an upgrade. We are the authority so our schema is definitive,
-        // and so if it's applied, then the upgrade is done.
+    if (state == SQLiteNodeState::LEADING || state == SQLiteNodeState::STANDINGDOWN) {
+        // We are upgraded if we have ever completed an upgrade (including via no-oop).
+        // We are the authority so our schema is definitive, and so if it's applied, then the upgrade is done.
         return _upgradeCompleted;
     }
 
-    // In any other state, we can't really know if we're uprgaded, because we don't know what that means without a leader.
+    // In any other state, we can't really know if we're upgraded, because we don't know what that means without a leader.
     return false;
 }
 
