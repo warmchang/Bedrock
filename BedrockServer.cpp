@@ -141,7 +141,7 @@ void BedrockServer::sync()
     // Now we jump into our main command processing loop.
     uint64_t nextActivity = STimeNow();
     unique_ptr<BedrockCommand> command(nullptr);
-    bool committingCommand = false;
+    bool commitInProgress = false;
     bool upgradeInProgress = false;
 
     // Timer for S_poll performance logging. Created outside the loop because it's cumulative.
@@ -285,7 +285,7 @@ void BedrockServer::sync()
             _notifyDoneSync.postPoll(fdm);
         }
 
-        if (command && committingCommand) {
+        if (command && commitInProgress) {
             void (*onPrepareHandler)(SQLite& db, int64_t tableID) = nullptr;
             bool enabled = command->shouldEnableOnPrepareNotification(db, &onPrepareHandler);
             if (enabled) {
@@ -321,10 +321,10 @@ void BedrockServer::sync()
             // If we bailed out while doing a upgradeDB, clear state
             if (upgradeInProgress) {
                 upgradeInProgress = false;
-                if (committingCommand) {
+                if (commitInProgress) {
                     const string commandName = command ? command->getMethodName() : "No Command";
                     db.rollback(commandName);
-                    committingCommand = false; //NOLINT
+                    commitInProgress = false; //NOLINT
                 }
             }
 
@@ -362,20 +362,10 @@ void BedrockServer::sync()
             continue;
         }
 
-        // This first time we start LEADING, we will try and upgrade the DB.
-        // We then set _upgradeCompleted and will not attempt to upgrade again, there is no more work to do.
-        if (
-            // If we've aleady set that we've completed an upgrade, we can skip this block.
-            !_upgradeCompleted &&
-
-            // Run this block id we *JUST* switched
-            ((preUpdateState != SQLiteNodeState::LEADING && getState() == SQLiteNodeState::LEADING)
-             ||
-            (getState() == SQLiteNodeState::LEADING && upgradeInProgress && !committingCommand))
-        ) {
-            // Store this before we start writing to the DB, which can take a while depending on what changes were made
-            // (for instance, adding an index).
-            upgradeInProgress = true;
+        // If _upgradeCompleted is set, I.e., we're run at least one upgrade, we can skip this block.
+        // Otherwise, if we're leading, let's start the commit.
+        // Also, if a commit is in progress, skip it (it's the commit we started on the last loop iteration).
+        if (!_upgradeCompleted && getState() == SQLiteNodeState::LEADING && !commitInProgress) {
             if (!_syncNode->hasQuorum()) {
                 // Because we are going to commit the upgrade as a QUORUM commit (i.e., wait until over half of nodes
                 // approve it), we wait until `hasQuorum()` is true before we even attempt to start it.
@@ -392,7 +382,7 @@ void BedrockServer::sync()
                 continue;
             }
             if (_upgradeDB(db)) {
-                committingCommand = true;
+                commitInProgress = true;
                 _syncNode->startCommit(SQLiteNode::QUORUM);
                 _lastQuorumCommandTime = STimeNow();
 
@@ -405,7 +395,6 @@ void BedrockServer::sync()
             } else {
                 // If we're not doing an upgrade, we don't need to keep suppressing multi-write, and we're done with
                 // the upgradeInProgress flag.
-                upgradeInProgress = false;
                 _upgradeCompleted = true;
                 SINFO("UpgradeDB skipped, done.");
             }
@@ -413,17 +402,18 @@ void BedrockServer::sync()
 
         // If we started a commit, and one's not in progress, then we've finished it and we'll take that command and
         // stick it back in the appropriate queue.
-        if (committingCommand && !_syncNode->commitInProgress()) {
-            // Record the time spent, unless we were upgrading, in which case, there's no command to write to.
-            if (command) {
-                command->stopTiming(BedrockCommand::COMMIT_SYNC);
+        if (commitInProgress) {
+            // If the sync node's still working on the existing commit, just continue.
+            if (_syncNode->commitInProgress()) {
+                continue;
             }
-            committingCommand = false;
+            commitInProgress = false;
 
             // If we were upgrading, there's no response to send, we're just done.
-            if (upgradeInProgress) {
+            // But if we failed, we just try again. We have no real other options as this is required for
+            // the database to be in a usable state.
+            if (!_upgradeCompleted) {
                 if (_syncNode->commitSucceeded()) {
-                    upgradeInProgress = false;
                     _upgradeCompleted = true;
                     SINFO("UpgradeDB succeeded, done.");
                     _notifyDone.push(true);
@@ -433,23 +423,28 @@ void BedrockServer::sync()
                 continue;
             }
 
+            // We should only get here with a command existing.
+            if (!command) {
+                SWARN("Sync thread commit with no command!");
+                continue;
+            }
+
+            // Record the time spent, unless we were upgrading, in which case, there's no command to write to.
+            command->stopTiming(BedrockCommand::COMMIT_SYNC);
+
             if (command->shouldPostProcess() && command->response.methodLine == "200 OK") {
                 // PostProcess if the command should run postProcess, and there have been no errors thrown thus far.
                 core.postProcessCommand(command, false);
             }
 
             if (_syncNode->commitSucceeded()) {
-                if (command) {
-                    SINFO("[performance] Sync thread finished committing command " << command->request.methodLine);
-                    _conflictManager.recordTables(command->request.methodLine, db.getTablesUsed());
+                SINFO("[performance] Sync thread finished committing command " << command->request.methodLine);
+                _conflictManager.recordTables(command->request.methodLine, db.getTablesUsed());
 
-                    // Otherwise, save the commit count, mark this command as complete, and reply.
-                    command->response["commitCount"] = to_string(db.getCommitCount());
-                    command->complete = true;
-                    _reply(command);
-                } else {
-                    SINFO("Sync thread finished committing non-command");
-                }
+                // Otherwise, save the commit count, mark this command as complete, and reply.
+                command->response["commitCount"] = to_string(db.getCommitCount());
+                command->complete = true;
+                _reply(command);
             } else {
                 // This should only happen if the cluster becomes largely disconnected while we were in the process of
                 // committing a QUORUM command - if we no longer have enough peers to reach QUORUM, we'll fall out of
@@ -457,14 +452,10 @@ void BedrockServer::sync()
                 // state, because this loop is skipped except when LEADING, FOLLOWING, or STANDINGDOWN. It's also
                 // theoretically feasible for this to happen if a follower fails to commit a transaction, but that
                 // probably indicates a bug (or a follower disk failure).
-                if (command) {
-                    SINFO("requeueing command " << command->request.methodLine
-                          << " after failed sync commit. Sync thread has " << _syncNodeQueuedCommands.size()
-                          << " queued commands.");
-                    _syncNodeQueuedCommands.push(move(command));
-                } else {
-                    SERROR("Unexpected sync thread commit state.");
-                }
+                SINFO("requeueing command " << command->request.methodLine
+                        << " after failed sync commit. Sync thread has " << _syncNodeQueuedCommands.size()
+                        << " queued commands.");
+                _syncNodeQueuedCommands.push(move(command));
             }
         }
 
@@ -472,11 +463,6 @@ void BedrockServer::sync()
         // there could also be other finished work to handle while we wait for that to complete. Let's see if we can
         // handle any of that work.
         try {
-            // We don't start processing a new command until we've completed any existing ones.
-            if (committingCommand) {
-                continue;
-            }
-
             // Don't escalate, leader can't handle the command anyway. Don't even dequeue the command, just leave it
             // until one of these states changes. This prevents an endless loop of escalating commands, having
             // SQLiteNode re-queue them because leader is standing down, and then escalating them again until leader
@@ -575,7 +561,7 @@ void BedrockServer::sync()
                     BedrockCore::RESULT result = core.processCommand(command, true);
                     if (result == BedrockCore::RESULT::NEEDS_COMMIT) {
                         // The processor says we need to commit this, so let's start that process.
-                        committingCommand = true;
+                        commitInProgress = true;
                         SINFO("[performance] Sync thread beginning committing command " << command->request.methodLine);
                         // START TIMING.
                         command->startTiming(BedrockCommand::COMMIT_SYNC);

@@ -264,9 +264,6 @@ private:
     // Each time we read a new request from a client, we give it a unique ID.
     atomic<uint64_t> _requestCount;
 
-    // This gets set to true when a database upgrade is in progress, letting workers know not to try to start any work.
-    atomic<bool> _upgradeInProgress;
-
     // This is the current version of the leader node, updated after every SQLiteNode::update() iteration. A
     // reference to this object is passed to the sync thread to allow this update.
     atomic<string> _leaderVersion;
