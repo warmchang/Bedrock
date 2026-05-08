@@ -215,12 +215,11 @@ public:
     // Returns if we are detached and the sync thread has exited.
     bool isDetached();
 
-    // Returns if all plugins have completed calling UpgradeDB
-
-    // This probably makes sense to be called `isUpgraded`
-    // It should return true if:
-    // We are leading and have attempted an upgrade (we can only do one upgrade per deployed version).
-    // We are following
+    // FOLLOWING nodes are always upgraded. LEADING nodes are upgraded if they've run _upgradeDB()
+    // at least once (STANDINGUP AND STANDINGDOWN count at LEADING here).
+    // Nodes in any other state are not upgraded.
+    // This would really make more sense being called "dbReadyToHandleRequests" or similar, but this
+    // API is in use in plugins.
     bool isUpgradeComplete();
 
     // See if there's a plugin that can turn this request into a command.
