@@ -142,7 +142,6 @@ void BedrockServer::sync()
     uint64_t nextActivity = STimeNow();
     unique_ptr<BedrockCommand> command(nullptr);
     bool commitInProgress = false;
-    bool upgradeInProgress = false;
 
     // Timer for S_poll performance logging. Created outside the loop because it's cumulative.
     AutoTimer pollTimer("sync thread poll");
@@ -318,14 +317,9 @@ void BedrockServer::sync()
             (getState() != SQLiteNodeState::LEADING && getState() != SQLiteNodeState::STANDINGDOWN)) {
             shutdownTimer.safeNodeState = chrono::steady_clock::now();
 
-            // If we bailed out while doing a upgradeDB, clear state
-            if (upgradeInProgress) {
-                upgradeInProgress = false;
-                if (commitInProgress) {
-                    const string commandName = command ? command->getMethodName() : "No Command";
-                    db.rollback(commandName);
-                    commitInProgress = false; //NOLINT
-                }
+            if (commitInProgress) {
+                db.rollback(command ? command->getMethodName() : "upgradeDB");
+                commitInProgress = false;
             }
 
             // We should give up an any commands, and let them be re-escalated. If commands were initiated locally,
