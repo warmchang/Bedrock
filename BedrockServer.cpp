@@ -458,8 +458,8 @@ void BedrockServer::sync()
                 // theoretically feasible for this to happen if a follower fails to commit a transaction, but that
                 // probably indicates a bug (or a follower disk failure).
                 SINFO("requeueing command " << command->request.methodLine
-                        << " after failed sync commit. Sync thread has " << _syncNodeQueuedCommands.size()
-                        << " queued commands.");
+                      << " after failed sync commit. Sync thread has " << _syncNodeQueuedCommands.size()
+                      << " queued commands.");
                 _syncNodeQueuedCommands.push(move(command));
             }
         }
