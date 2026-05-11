@@ -382,7 +382,7 @@ void BedrockServer::sync()
                 // It's possible that _upgradeDB throws at least "512 Internal Lock Timeout".
                 // Because upgrading the DB is critical and needs to be completed before we can use the
                 // DB for anything, we attempt a retry here. A lock timeout should be retryable.
-                SWARN("Got exception: " << e.method << " attempting to upgrade DB, will retry.");
+                SWARN("Got exception when attempting to upgrade DB, will retry.", {{"command", e.method}, {"what", e.what()}});
                 db.rollback();
                 continue;
             }
@@ -443,7 +443,7 @@ void BedrockServer::sync()
             }
 
             if (_syncNode->commitSucceeded()) {
-                SINFO("[performance] Sync thread finished committing command " << command->request.methodLine);
+                SINFO("Sync thread finished committing command " << command->request.methodLine);
                 _conflictManager.recordTables(command->request.methodLine, db.getTablesUsed());
 
                 // Otherwise, save the commit count, mark this command as complete, and reply.
@@ -1696,17 +1696,17 @@ bool BedrockServer::dbReadyToHandleRequests()
 {
     auto state = getState();
     if (state == SQLiteNodeState::FOLLOWING) {
-        // We are as upgraded as we can be, because someone else is controlling what the state of "upgraded" is,
-        // and they will broadcast those changes to us when appropriate.
+        // If we are following someone else is in charge of upgrades, we can serve reqeusts.
         return true;
     }
     if (state == SQLiteNodeState::LEADING || state == SQLiteNodeState::STANDINGDOWN) {
         // We are upgraded if we have ever completed an upgrade (including via no-op).
-        // We are the authority so our schema is definitive, and so if it's applied, then the upgrade is done.
+        // If we have not yet completed an upgrade (the first thing we do when first going LEADING), we need
+        // to do that before we're ready to serve requests.
         return _upgradeCompleted;
     }
 
-    // In any other state, we can't really know if we're upgraded, because we don't know what that means without a leader.
+    // In any other state, we aren't ready.
     return false;
 }
 
