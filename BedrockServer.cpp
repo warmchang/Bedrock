@@ -1696,7 +1696,7 @@ bool BedrockServer::dbReadyToHandleRequests()
 {
     auto state = getState();
     if (state == SQLiteNodeState::FOLLOWING) {
-        // If we are following someone else is in charge of upgrades, we can serve reqeusts.
+        // If we are following someone else is in charge of upgrades, we can serve requests.
         return true;
     }
     if (state == SQLiteNodeState::LEADING || state == SQLiteNodeState::STANDINGDOWN) {
