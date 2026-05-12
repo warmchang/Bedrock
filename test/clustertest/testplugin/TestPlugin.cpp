@@ -663,13 +663,17 @@ void BedrockPlugin_TestPlugin::stateChanged(SQLite& db, SQLiteNodeState newState
             return;
         }
         SINFO("Sleeping until the server is done upgrading.");
-        while (!server.isUpgradeComplete()) {
+        while (!server.dbReadyToHandleRequests()) {
             usleep(50'000);
         }
 
         SQResult result;
         db.read("SELECT count(*) FROM dbupgrade", result);
-        _maxID = SToInt64(result[0][0]);
+        // It's possible to fall out of leading and be following again, and if so, we don't want to
+        // set _maxID.
+        if (server.getState() == SQLiteNodeState::LEADING) {
+            _maxID = SToInt64(result[0][0]);
+        }
         SINFO("Server completed upgrade, _maxID " << _maxID);
     }).detach();
 }
